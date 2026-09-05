@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   catalog:
@@ -18,12 +18,16 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Crawl every brand and model folder
-        run: python archive_catalog.py out/archive-catalog
+      - name: Crawl every brand and model folder + rebuild model dropdown
+        run: >-
+          python archive_catalog.py out/archive-catalog
+          --sync-workflow .github/workflows/harvest.yml
 
       - name: Show summary
         if: always()
@@ -32,6 +36,20 @@ jobs:
             cat out/archive-catalog/summary.md
             cat out/archive-catalog/summary.md >> "$GITHUB_STEP_SUMMARY"
           fi
+
+      - name: Commit refreshed model dropdown
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- .github/workflows/harvest.yml; then
+            echo "Model dropdown already matches the live archive."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/workflows/harvest.yml
+          git commit -m "Sync model dropdown from André archive"
+          git push
 
       - name: Upload archive catalog
         if: always()
