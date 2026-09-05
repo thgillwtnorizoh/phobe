@@ -6,6 +6,7 @@ on:
     paths:
       - "phone_defaults.py"
       - "archive_runner.py"
+      - "model_runner.py"
       - ".github/workflows/harvest.yml"
   workflow_dispatch:
     inputs:
@@ -14,8 +15,13 @@ on:
         required: true
         default: "Samsung"
         type: string
+      model:
+        description: "Exact or substring archive model. Leave blank to use the first N models."
+        required: false
+        default: "Galaxy-S9"
+        type: string
       limit_models:
-        description: "How many model folders to process. Use 0 for every model in that brand."
+        description: "Maximum matched model folders. Use 0 for every match."
         required: true
         default: "3"
         type: string
@@ -45,14 +51,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Offline parser test
-        run: python archive_runner.py self-test
+      - name: Offline parser and selector test
+        run: python model_runner.py self-test
 
   live-smoke:
     if: github.event_name == 'push'
     needs: self-test
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
@@ -60,12 +66,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Crawl one live Samsung model
+      - name: Crawl live Galaxy S9
         run: >-
-          python archive_runner.py harvest
+          python model_runner.py harvest
           --brand Samsung
+          --model Galaxy-S9
           --limit-models 1
-          --max-repos 1
+          --max-repos 4
           --out-dir out/smoke
       - name: Upload smoke result
         if: always()
@@ -89,13 +96,14 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Harvest selected brand
+      - name: Harvest selected phone(s)
         shell: bash
         run: |
           set -euo pipefail
           ARGS=(
             harvest
             --brand "${{ inputs.brand }}"
+            --model "${{ inputs.model }}"
             --limit-models "${{ inputs.limit_models }}"
             --max-repos "${{ inputs.max_repos }}"
             --out-dir "out/${{ inputs.brand }}"
@@ -103,7 +111,7 @@ jobs:
           if [[ "${{ inputs.download_audio }}" == "true" ]]; then
             ARGS+=(--download)
           fi
-          python archive_runner.py "${ARGS[@]}"
+          python model_runner.py "${ARGS[@]}"
 
       - name: Human-readable summary
         if: always()
@@ -124,6 +132,7 @@ jobs:
           summary = (
               f"## Phone Default Harvester\n\n"
               f"- Brand: `${{ inputs.brand }}`\n"
+              f"- Model filter: `${{ inputs.model }}`\n"
               f"- Models processed: **{len(rows)}**\n"
               f"- Confirmed: **{confirmed}**\n"
               f"- Partial: **{partial}**\n"
