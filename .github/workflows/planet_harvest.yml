@@ -186,6 +186,7 @@ jobs:
 
   resolve:
     needs: prepare
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 330
     strategy:
@@ -228,7 +229,7 @@ jobs:
 
   merge-resolution:
     needs: resolve
-    if: always() && needs.resolve.result != 'cancelled'
+    if: github.event_name == 'workflow_dispatch' && always() && needs.resolve.result != 'cancelled'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -273,6 +274,7 @@ jobs:
 
   download:
     needs: merge-resolution
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 330
     strategy:
@@ -312,7 +314,7 @@ jobs:
 
   finalize:
     needs: download
-    if: always() && needs.download.result != 'cancelled'
+    if: github.event_name == 'workflow_dispatch' && always() && needs.download.result != 'cancelled'
     runs-on: ubuntu-latest
     timeout-minutes: 330
     steps:
