@@ -48,6 +48,34 @@ jobs:
       - name: Offline parser test
         run: python archive_runner.py self-test
 
+  live-smoke:
+    if: github.event_name == 'push'
+    needs: self-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Crawl one live Samsung model
+        run: >-
+          python archive_runner.py harvest
+          --brand Samsung
+          --limit-models 1
+          --max-repos 1
+          --out-dir out/smoke
+      - name: Upload smoke result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phone-defaults-smoke-${{ github.run_number }}
+          path: out/smoke/
+          if-no-files-found: warn
+          retention-days: 7
+
   harvest:
     if: github.event_name == 'workflow_dispatch'
     needs: self-test
