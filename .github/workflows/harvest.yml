@@ -12,25 +12,74 @@ on:
   workflow_dispatch:
     inputs:
       brand:
-        description: "Archive brand folder, e.g. Samsung, Xiaomi, Motorola"
+        description: "Phone brand / archive folder"
         required: true
         default: "Samsung"
+        type: choice
+        options:
+          - Samsung
+          - Google
+          - Xiaomi
+          - OnePlus
+          - Motorola
+          - Huawei
+          - Honor
+          - Oppo
+          - Vivo
+          - Sony
+          - LG
+          - HTC
+          - Nokia
+          - Asus
+          - Apple
+          - Realme
+          - Nothing
+          - ZTE
+          - Meizu
+          - Custom
+      custom_brand:
+        description: "Only used when Brand = Custom. Must match André's archive folder name."
+        required: false
+        default: ""
         type: string
+      scope:
+        description: "What should this run harvest?"
+        required: true
+        default: "One model"
+        type: choice
+        options:
+          - One model
+          - Matching models
+          - First N models
+          - Whole brand
       model:
-        description: "Exact or substring archive model. Leave blank to use the first N models."
+        description: "Exact/substring model filter. Used for One model or Matching models."
         required: false
         default: "Galaxy-S9"
         type: string
       limit_models:
-        description: "Maximum matched model folders. Use 0 for every match."
+        description: "Maximum models for Matching / First N. 0 means every match."
         required: true
         default: "3"
-        type: string
+        type: choice
+        options:
+          - "1"
+          - "3"
+          - "5"
+          - "10"
+          - "25"
+          - "50"
+          - "0"
       max_repos:
-        description: "Maximum GitHub firmware repositories inspected per model"
+        description: "Maximum ordinary firmware repos inspected per model"
         required: true
         default: "4"
-        type: string
+        type: choice
+        options:
+          - "2"
+          - "4"
+          - "8"
+          - "12"
       download_audio:
         description: "Download matched default ringtone / notification / alarm files"
         required: true
@@ -97,17 +146,76 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Resolve friendly controls
+        id: controls
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BRAND="${{ inputs.brand }}"
+          if [[ "$BRAND" == "Custom" ]]; then
+            BRAND="${{ inputs.custom_brand }}"
+            if [[ -z "$BRAND" ]]; then
+              echo "Brand is Custom but custom_brand is blank." >&2
+              exit 2
+            fi
+          fi
+
+          SCOPE="${{ inputs.scope }}"
+          MODEL="${{ inputs.model }}"
+          LIMIT="${{ inputs.limit_models }}"
+
+          case "$SCOPE" in
+            "One model")
+              if [[ -z "$MODEL" ]]; then
+                echo "One model requires a model filter." >&2
+                exit 2
+              fi
+              LIMIT=1
+              ;;
+            "Matching models")
+              if [[ -z "$MODEL" ]]; then
+                echo "Matching models requires a model filter." >&2
+                exit 2
+              fi
+              ;;
+            "First N models")
+              MODEL=""
+              if [[ "$LIMIT" == "0" ]]; then
+                echo "First N with limit 0 is the same as Whole brand; continuing." >&2
+              fi
+              ;;
+            "Whole brand")
+              MODEL=""
+              LIMIT=0
+              ;;
+          esac
+
+          echo "brand=$BRAND" >> "$GITHUB_OUTPUT"
+          echo "model=$MODEL" >> "$GITHUB_OUTPUT"
+          echo "limit=$LIMIT" >> "$GITHUB_OUTPUT"
+
+          echo "HARVEST_BRAND=$BRAND" >> "$GITHUB_ENV"
+          echo "HARVEST_MODEL=$MODEL" >> "$GITHUB_ENV"
+          echo "HARVEST_LIMIT=$LIMIT" >> "$GITHUB_ENV"
+
+          echo "### Resolved controls" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Brand: \`$BRAND\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Scope: \`$SCOPE\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Model filter: \`${MODEL:-<none>}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Model limit: \`$LIMIT\`" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Harvest selected phone(s)
         shell: bash
         run: |
           set -euo pipefail
           ARGS=(
             harvest
-            --brand "${{ inputs.brand }}"
-            --model "${{ inputs.model }}"
-            --limit-models "${{ inputs.limit_models }}"
+            --brand "${{ steps.controls.outputs.brand }}"
+            --model "${{ steps.controls.outputs.model }}"
+            --limit-models "${{ steps.controls.outputs.limit }}"
             --max-repos "${{ inputs.max_repos }}"
-            --out-dir "out/${{ inputs.brand }}"
+            --out-dir "out/harvest"
           )
           if [[ "${{ inputs.download_audio }}" == "true" ]]; then
             ARGS+=(--download)
@@ -121,19 +229,25 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           import csv
-          root = Path("out/${{ inputs.brand }}")
+          import os
+
+          root = Path("out/harvest")
           rows = []
           p = root / "results.csv"
           if p.exists():
               with p.open(encoding="utf-8-sig", newline="") as f:
                   rows = list(csv.DictReader(f))
+
           confirmed = sum(r.get("confidence") == "CONFIRMED" for r in rows)
           partial = sum(r.get("confidence") == "PARTIAL" for r in rows)
           unresolved = len(rows) - confirmed - partial
+          brand = os.environ.get("HARVEST_BRAND", "?")
+          model = os.environ.get("HARVEST_MODEL", "") or "<none>"
+
           summary = (
               f"## Phone Default Harvester\n\n"
-              f"- Brand: `${{ inputs.brand }}`\n"
-              f"- Model filter: `${{ inputs.model }}`\n"
+              f"- Brand: `{brand}`\n"
+              f"- Model filter: `{model}`\n"
               f"- Models processed: **{len(rows)}**\n"
               f"- Confirmed: **{confirmed}**\n"
               f"- Partial: **{partial}**\n"
@@ -148,7 +262,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: phone-defaults-${{ inputs.brand }}-${{ github.run_number }}
+          name: phone-defaults-${{ github.run_number }}
           path: out/
           if-no-files-found: warn
           retention-days: 30
