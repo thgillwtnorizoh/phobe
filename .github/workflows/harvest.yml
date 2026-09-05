@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "phone_defaults.py"
+      - "archive_runner.py"
       - ".github/workflows/harvest.yml"
   workflow_dispatch:
     inputs:
@@ -45,7 +46,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Offline parser test
-        run: python phone_defaults.py self-test
+        run: python archive_runner.py self-test
 
   harvest:
     if: github.event_name == 'workflow_dispatch'
@@ -74,7 +75,7 @@ jobs:
           if [[ "${{ inputs.download_audio }}" == "true" ]]; then
             ARGS+=(--download)
           fi
-          python phone_defaults.py "${ARGS[@]}"
+          python archive_runner.py "${ARGS[@]}"
 
       - name: Human-readable summary
         if: always()
