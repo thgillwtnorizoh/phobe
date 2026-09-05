@@ -1,0 +1,345 @@
+name: Planet harvest all phone defaults
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Full archive, or retry only unfinished work from a previous planet run"
+        required: true
+        default: "Full archive"
+        type: choice
+        options:
+          - Full archive
+          - Retry previous failures
+      source_run_id:
+        description: "Required for Retry previous failures. Run ID that produced planet-state-<run_id>."
+        required: false
+        default: ""
+        type: string
+      retry_unresolved:
+        description: "On retry, also revisit UNRESOLVED / EVIDENCE_ONLY models (not just transient failures)"
+        required: true
+        default: false
+        type: boolean
+      max_repos:
+        description: "Ordinary GitHub firmware repos inspected per model"
+        required: true
+        default: "4"
+        type: choice
+        options:
+          - "2"
+          - "4"
+          - "8"
+      archive_page_delay:
+        description: "Cooldown after each André archive index page request (seconds)"
+        required: true
+        default: "0.8"
+        type: choice
+        options:
+          - "0.5"
+          - "0.8"
+          - "1.0"
+          - "1.5"
+      model_delay:
+        description: "Extra cooldown after each resolved model (seconds)"
+        required: true
+        default: "2.0"
+        type: choice
+        options:
+          - "1.0"
+          - "2.0"
+          - "3.0"
+          - "5.0"
+      audio_delay:
+        description: "Cooldown between unique resolved audio downloads (seconds)"
+        required: true
+        default: "1.5"
+        type: choice
+        options:
+          - "1.0"
+          - "1.5"
+          - "2.0"
+          - "3.0"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: phobe-planet-harvest
+  cancel-in-progress: false
+
+env:
+  RESOLVE_SHARDS: "64"
+  DOWNLOAD_SHARDS: "24"
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Offline planet runner self-test
+        run: python planet_runner.py self-test
+
+      - name: Validate retry input
+        if: inputs.mode == 'Retry previous failures'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${{ inputs.source_run_id }}" ]]; then
+            echo "source_run_id is required in retry mode." >&2
+            exit 2
+          fi
+
+      - name: Build full archive plan politely
+        if: inputs.mode == 'Full archive'
+        run: >-
+          python planet_runner.py make-plan
+          --out out/plan
+          --resolve-shards "$RESOLVE_SHARDS"
+          --catalog-delay 0.5
+
+      - name: Download previous resumable state
+        if: inputs.mode == 'Retry previous failures'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p previous
+          gh run download "$SOURCE_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "planet-state-$SOURCE_RUN_ID" \
+            --dir previous
+
+      - name: Build retry-only plan
+        if: inputs.mode == 'Retry previous failures'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARGS=(
+            retry-plan
+            --previous-state previous
+            --out out/plan
+            --resolve-shards "$RESOLVE_SHARDS"
+          )
+          if [[ "${{ inputs.retry_unresolved }}" == "true" ]]; then
+            ARGS+=(--retry-unresolved)
+          fi
+          python planet_runner.py "${ARGS[@]}"
+
+      - name: Plan summary
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p = json.loads(Path('out/plan/plan.json').read_text(encoding='utf-8'))
+          text = (
+              f"## Planet plan\n\n"
+              f"- Mode: `{p.get('mode')}`\n"
+              f"- Models scheduled for resolution: **{p.get('model_count', 0)}**\n"
+              f"- Resolve shards: **{p.get('resolve_shards', 0)}**\n"
+          )
+          print(text)
+          Path('plan-summary.md').write_text(text, encoding='utf-8')
+          PY
+          cat plan-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: planet-plan-${{ github.run_id }}
+          path: out/plan/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 9
+
+  resolve:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63]
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: planet-plan-${{ github.run_id }}
+          path: work/plan
+
+      - name: Resolve shard ${{ matrix.shard }}
+        run: >-
+          python planet_runner.py resolve-shard
+          --plan work/plan/plan.json
+          --shard-index "${{ matrix.shard }}"
+          --max-repos "${{ inputs.max_repos }}"
+          --archive-page-delay "${{ inputs.archive_page_delay }}"
+          --model-delay "${{ inputs.model_delay }}"
+          --max-runtime-minutes 300
+          --out out/resolve
+
+      - name: Upload resumable resolve shard
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: planet-resolve-${{ github.run_id }}-${{ matrix.shard }}
+          path: out/resolve/resolve-*/
+          if-no-files-found: warn
+          retention-days: 14
+          compression-level: 9
+
+  merge-resolution:
+    needs: resolve
+    if: always() && needs.resolve.result != 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: planet-plan-${{ github.run_id }}
+          path: work/plan
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: planet-resolve-${{ github.run_id }}-*
+          path: work/resolved
+
+      - name: Merge resolution state and build unique fetch queue
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARGS=(
+            merge-resolve
+            --plan work/plan/plan.json
+            --resolved-root work/resolved
+            --download-shards "$DOWNLOAD_SHARDS"
+            --current-run-id "$GITHUB_RUN_ID"
+            --out out/merged
+          )
+          if [[ -f work/plan/previous_state.json ]]; then
+            ARGS+=(--previous-state work/plan/previous_state.json)
+          fi
+          python planet_runner.py "${ARGS[@]}"
+
+      - name: Upload merged checkpoint
+        uses: actions/upload-artifact@v4
+        with:
+          name: planet-merged-${{ github.run_id }}
+          path: out/merged/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 9
+
+  download:
+    needs: merge-resolution
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: planet-merged-${{ github.run_id }}
+          path: work/merged
+
+      - name: Download unique audio shard ${{ matrix.shard }} politely
+        run: >-
+          python planet_runner.py download-shard
+          --plan work/merged/download_plan.json
+          --shard-index "${{ matrix.shard }}"
+          --audio-delay "${{ inputs.audio_delay }}"
+          --request-timeout 60
+          --max-runtime-minutes 300
+          --out out/download
+
+      - name: Upload raw download checkpoint
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: planet-download-${{ github.run_id }}-${{ matrix.shard }}
+          path: out/download/download-*/
+          if-no-files-found: warn
+          retention-days: 14
+          compression-level: 0
+
+  finalize:
+    needs: download
+    if: always() && needs.download.result != 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: planet-merged-${{ github.run_id }}
+          path: work/merged
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: planet-download-${{ github.run_id }}-*
+          path: work/downloads
+
+      - name: Checksum dedupe, flatten sound vault, and write failure list
+        run: >-
+          python planet_runner.py finalize
+          --merged work/merged
+          --downloads-root work/downloads
+          --current-run-id "$GITHUB_RUN_ID"
+          --current-sound-artifact "phone-defaults-planet-$GITHUB_RUN_ID"
+          --out out/final
+
+      - name: Upload durable retry state first
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: planet-state-${{ github.run_id }}
+          path: out/final/state/
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 9
+
+      - name: Human-readable summary
+        if: always()
+        shell: bash
+        run: |
+          if [[ -f out/final/summary.md ]]; then
+            cat out/final/summary.md
+            cat out/final/summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload final sound vault and reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phone-defaults-planet-${{ github.run_id }}
+          path: out/final/
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
