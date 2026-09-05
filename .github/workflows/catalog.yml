@@ -37,19 +37,43 @@ jobs:
             cat out/archive-catalog/summary.md >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Commit refreshed model dropdown
-        shell: bash
+      - name: Publish generated workflow as raw Git blob
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPOSITORY: ${{ github.repository }}
         run: |
-          set -euo pipefail
-          if git diff --quiet -- .github/workflows/harvest.yml; then
-            echo "Model dropdown already matches the live archive."
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .github/workflows/harvest.yml
-          git commit -m "Sync model dropdown from André archive"
-          git push
+          python - <<'PY'
+          import base64, json, os, urllib.request
+          from pathlib import Path
+
+          workflow = Path('.github/workflows/harvest.yml')
+          data = workflow.read_bytes()
+          payload = json.dumps({
+              'content': base64.b64encode(data).decode('ascii'),
+              'encoding': 'base64',
+          }).encode('utf-8')
+          url = f"https://api.github.com/repos/{os.environ['GH_REPOSITORY']}/git/blobs"
+          request = urllib.request.Request(
+              url,
+              data=payload,
+              method='POST',
+              headers={
+                  'Authorization': f"Bearer {os.environ['GH_TOKEN']}",
+                  'Accept': 'application/vnd.github+json',
+                  'X-GitHub-Api-Version': '2022-11-28',
+                  'User-Agent': 'phobe-model-catalog',
+                  'Content-Type': 'application/json',
+              },
+          )
+          with urllib.request.urlopen(request, timeout=60) as response:
+              result = json.load(response)
+          sha = result['sha']
+          print(f"GENERATED_WORKFLOW_BLOB_SHA={sha}")
+          out = Path('out/archive-catalog')
+          out.mkdir(parents=True, exist_ok=True)
+          (out / 'harvest_workflow_blob_sha.txt').write_text(sha + '\n', encoding='utf-8')
+          (out / 'harvest.generated.yml').write_bytes(data)
+          PY
 
       - name: Upload archive catalog
         if: always()
