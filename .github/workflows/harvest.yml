@@ -7,6 +7,7 @@ on:
       - "phone_defaults.py"
       - "archive_runner.py"
       - "model_runner.py"
+      - "corpus_runner.py"
       - ".github/workflows/harvest.yml"
   workflow_dispatch:
     inputs:
@@ -52,7 +53,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Offline parser and selector test
-        run: python model_runner.py self-test
+        run: python corpus_runner.py self-test
 
   live-smoke:
     if: github.event_name == 'push'
@@ -68,7 +69,7 @@ jobs:
           python-version: "3.12"
       - name: Crawl live Galaxy S9
         run: >-
-          python model_runner.py harvest
+          python corpus_runner.py harvest
           --brand Samsung
           --model Galaxy-S9
           --limit-models 1
@@ -111,7 +112,7 @@ jobs:
           if [[ "${{ inputs.download_audio }}" == "true" ]]; then
             ARGS+=(--download)
           fi
-          python model_runner.py "${ARGS[@]}"
+          python corpus_runner.py "${ARGS[@]}"
 
       - name: Human-readable summary
         if: always()
