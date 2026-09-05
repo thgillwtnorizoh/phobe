@@ -1,0 +1,116 @@
+name: Harvest phone defaults
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "phone_defaults.py"
+      - ".github/workflows/harvest.yml"
+  workflow_dispatch:
+    inputs:
+      brand:
+        description: "Archive brand folder, e.g. Samsung, Xiaomi, Motorola"
+        required: true
+        default: "Samsung"
+        type: string
+      limit_models:
+        description: "How many model folders to process. Use 0 for every model in that brand."
+        required: true
+        default: "3"
+        type: string
+      max_repos:
+        description: "Maximum GitHub firmware repositories inspected per model"
+        required: true
+        default: "4"
+        type: string
+      download_audio:
+        description: "Download matched default ringtone / notification / alarm files"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phone-default-harvest-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  self-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Offline parser test
+        run: python phone_defaults.py self-test
+
+  harvest:
+    if: github.event_name == 'workflow_dispatch'
+    needs: self-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Harvest selected brand
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARGS=(
+            harvest
+            --brand "${{ inputs.brand }}"
+            --limit-models "${{ inputs.limit_models }}"
+            --max-repos "${{ inputs.max_repos }}"
+            --out-dir "out/${{ inputs.brand }}"
+          )
+          if [[ "${{ inputs.download_audio }}" == "true" ]]; then
+            ARGS+=(--download)
+          fi
+          python phone_defaults.py "${ARGS[@]}"
+
+      - name: Human-readable summary
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import csv
+          root = Path("out/${{ inputs.brand }}")
+          rows = []
+          p = root / "results.csv"
+          if p.exists():
+              with p.open(encoding="utf-8-sig", newline="") as f:
+                  rows = list(csv.DictReader(f))
+          confirmed = sum(r.get("confidence") == "CONFIRMED" for r in rows)
+          partial = sum(r.get("confidence") == "PARTIAL" for r in rows)
+          unresolved = len(rows) - confirmed - partial
+          summary = (
+              f"## Phone Default Harvester\n\n"
+              f"- Brand: `${{ inputs.brand }}`\n"
+              f"- Models processed: **{len(rows)}**\n"
+              f"- Confirmed: **{confirmed}**\n"
+              f"- Partial: **{partial}**\n"
+              f"- Other / unresolved: **{unresolved}**\n"
+          )
+          Path("summary.md").write_text(summary, encoding="utf-8")
+          print(summary)
+          PY
+          cat summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload harvest artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phone-defaults-${{ inputs.brand }}-${{ github.run_number }}
+          path: out/
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 6
