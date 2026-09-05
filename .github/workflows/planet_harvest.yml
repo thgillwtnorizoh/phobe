@@ -1,6 +1,16 @@
 name: Planet harvest all phone defaults
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "planet_runner.py"
+      - "archive_catalog.py"
+      - "archive_runner.py"
+      - "model_runner.py"
+      - "corpus_runner.py"
+      - "phone_defaults.py"
+      - ".github/workflows/planet_harvest.yml"
   workflow_dispatch:
     inputs:
       mode:
@@ -74,7 +84,20 @@ env:
   DOWNLOAD_SHARDS: "24"
 
 jobs:
+  smoke:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Offline planet runner self-test
+        run: python planet_runner.py self-test
+
   prepare:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
