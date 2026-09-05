@@ -52,10 +52,48 @@ on:
           - Matching models
           - First N models
           - Whole brand
+      model_preset:
+        description: "Quick model/family filter. Ignored when Typed model/filter below is not blank."
+        required: true
+        default: "Galaxy S9"
+        type: choice
+        options:
+          - "Galaxy S9"
+          - "Galaxy Note 7"
+          - "Galaxy Note 8"
+          - "Galaxy Note 9"
+          - "Galaxy S8"
+          - "Galaxy S10"
+          - "Galaxy S20"
+          - "Galaxy S21"
+          - "Galaxy S22"
+          - "Galaxy S23"
+          - "Galaxy S24"
+          - "Galaxy S25"
+          - "Galaxy Note"
+          - "Galaxy S"
+          - "Galaxy A"
+          - "Galaxy Z"
+          - "Pixel 6"
+          - "Pixel 7"
+          - "Pixel 8"
+          - "Pixel 9"
+          - "Pixel"
+          - "Redmi Note"
+          - "Redmi"
+          - "Mi"
+          - "OnePlus"
+          - "Xperia"
+          - "Moto G"
+          - "Moto"
+          - "iPhone"
+          - "LG G"
+          - "HTC One"
+          - "Nokia"
       model:
-        description: "Exact/substring model filter. Used for One model or Matching models."
+        description: "Typed model/filter (optional). If nonblank, this OVERRIDES Model preset."
         required: false
-        default: "Galaxy-S9"
+        default: ""
         type: string
       limit_models:
         description: "Maximum models for Matching / First N. 0 means every match."
@@ -162,8 +200,17 @@ jobs:
           fi
 
           SCOPE="${{ inputs.scope }}"
-          MODEL="${{ inputs.model }}"
+          PRESET_MODEL="${{ inputs.model_preset }}"
+          TYPED_MODEL="${{ inputs.model }}"
           LIMIT="${{ inputs.limit_models }}"
+
+          if [[ -n "$TYPED_MODEL" ]]; then
+            MODEL="$TYPED_MODEL"
+            MODEL_SOURCE="typed"
+          else
+            MODEL="$PRESET_MODEL"
+            MODEL_SOURCE="preset"
+          fi
 
           case "$SCOPE" in
             "One model")
@@ -181,12 +228,14 @@ jobs:
               ;;
             "First N models")
               MODEL=""
+              MODEL_SOURCE="scope"
               if [[ "$LIMIT" == "0" ]]; then
                 echo "First N with limit 0 is the same as Whole brand; continuing." >&2
               fi
               ;;
             "Whole brand")
               MODEL=""
+              MODEL_SOURCE="scope"
               LIMIT=0
               ;;
           esac
@@ -197,12 +246,15 @@ jobs:
 
           echo "HARVEST_BRAND=$BRAND" >> "$GITHUB_ENV"
           echo "HARVEST_MODEL=$MODEL" >> "$GITHUB_ENV"
+          echo "HARVEST_MODEL_SOURCE=$MODEL_SOURCE" >> "$GITHUB_ENV"
           echo "HARVEST_LIMIT=$LIMIT" >> "$GITHUB_ENV"
 
           echo "### Resolved controls" >> "$GITHUB_STEP_SUMMARY"
           echo "- Brand: \`$BRAND\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- Scope: \`$SCOPE\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Model filter: \`${MODEL:-<none>}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Preset model: \`$PRESET_MODEL\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Typed model: \`${TYPED_MODEL:-<blank>}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Effective model filter: \`${MODEL:-<none>}\` ($MODEL_SOURCE)" >> "$GITHUB_STEP_SUMMARY"
           echo "- Model limit: \`$LIMIT\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Harvest selected phone(s)
@@ -243,11 +295,12 @@ jobs:
           unresolved = len(rows) - confirmed - partial
           brand = os.environ.get("HARVEST_BRAND", "?")
           model = os.environ.get("HARVEST_MODEL", "") or "<none>"
+          model_source = os.environ.get("HARVEST_MODEL_SOURCE", "?")
 
           summary = (
               f"## Phone Default Harvester\n\n"
               f"- Brand: `{brand}`\n"
-              f"- Model filter: `{model}`\n"
+              f"- Model filter: `{model}` ({model_source})\n"
               f"- Models processed: **{len(rows)}**\n"
               f"- Confirmed: **{confirmed}**\n"
               f"- Partial: **{partial}**\n"
