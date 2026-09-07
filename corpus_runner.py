@@ -3,8 +3,12 @@
 
 Before using GitHub's global code search, inspect a few compact public repositories
 whose file names contain friendly phone model names and whose contents contain
-captured Android properties.  This bridges archive names such as `Galaxy-S9` to
+captured Android properties. This bridges archive names such as `Galaxy-S9` to
 real property dumps without requiring a codename database first.
+
+v2 adds a conservative identity/provenance gate. Evidence from another brand,
+another marketing model, or an obvious aftermarket/custom ROM is not allowed to
+be promoted as factory-default evidence merely because a short model name collides.
 """
 from __future__ import annotations
 
@@ -12,10 +16,15 @@ import base64
 import sys
 import urllib.parse
 
+import identity_guard as ig
 import model_runner as mr
 
 pd = mr.pd
 _ORIGINAL_CODE_EVIDENCE = mr.github_code_evidence
+_ORIGINAL_REPO_EVIDENCE = pd.github_evidence
+
+# Use model_runner's stronger query variants in planet/corpus mode too.
+pd.repo_search_queries = mr.better_repo_queries
 
 # Small/medium public corpora with useful captured build/getprop data.
 CORPORA = (
@@ -39,6 +48,34 @@ def read_repo_file(repo: str, branch: str, path: str, token: str) -> str:
     except Exception as exc:
         print(f"  [corpus file warn] {repo}/{path}: {exc}", file=sys.stderr)
         return ""
+
+
+def _guard_evidence(brand: str, model: str, token: str, evidence, label: str):
+    kept, audits = ig.filter_evidence(
+        brand,
+        model,
+        evidence,
+        token,
+        pd.js,
+        byte_loader=lambda url, tok: pd.req(url, tok),
+    )
+    for audit in audits:
+        if audit["status"] != "ACCEPT":
+            print(
+                f"  [identity {label}] {audit['status']} "
+                f"{audit['repo']}/{audit['path']}: {audit['reason']}",
+                file=sys.stderr,
+            )
+    return kept
+
+
+def validated_repo_evidence(brand: str, model: str, token: str, max_repos: int = 4):
+    raw = _ORIGINAL_REPO_EVIDENCE(brand, model, token, max_repos)
+    return _guard_evidence(brand, model, token, raw, "repo")
+
+
+# Planet runner calls pd.github_evidence directly. Gate that first-stage evidence.
+pd.github_evidence = validated_repo_evidence
 
 
 def corpus_evidence(brand: str, model: str, token: str, max_files: int = 12):
@@ -90,6 +127,13 @@ def corpus_evidence(brand: str, model: str, token: str, max_files: int = 12):
             body = read_repo_file(repo, branch, path, token)
             if not body:
                 continue
+            verdict = ig.validate_source(brand, model, body, repo, path)
+            if verdict.status != "ACCEPT":
+                print(
+                    f"  [identity corpus] {verdict.status} {repo}/{path}: {verdict.reason}",
+                    file=sys.stderr,
+                )
+                continue
             evidence.extend(mr.extended_parse_evidence(body, repo, path))
             kinds = {item.kind for item in evidence}
             if kinds >= {"ringtone", "notification", "alarm"}:
@@ -106,7 +150,8 @@ def smart_code_evidence(brand: str, model: str, token: str, max_files: int = 12)
     corpus = corpus_evidence(brand, model, token, max_files=max_files)
     if {item.kind for item in corpus} >= {"ringtone", "notification", "alarm"}:
         return corpus
-    global_hits = _ORIGINAL_CODE_EVIDENCE(brand, model, token, max_files=max_files)
+    global_raw = _ORIGINAL_CODE_EVIDENCE(brand, model, token, max_files=max_files)
+    global_hits = _guard_evidence(brand, model, token, global_raw, "code")
     return mr.merge_evidence(corpus, global_hits)
 
 
